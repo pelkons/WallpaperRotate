@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=WallpaperRotate
+Comment=Rotate your desktop wallpaper on a schedule
+Comment[ru]=Смена обоев рабочего стола по расписанию
+GenericName=Wallpaper Rotation
+GenericName[ru]=Смена обоев
+Exec=wallpaper-rotate-app
+Icon=io.github.pelkons.WallpaperRotate
+Terminal=false
+Categories=GTK;Settings;DesktopSettings;
+Keywords=wallpaper;background;slideshow;
+Keywords[ru]=обои;фон;wallpaper;
+StartupNotify=true
+StartupWMClass=io.github.pelkons.WallpaperRotate

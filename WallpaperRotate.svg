@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a5bd8"/>
+      <stop offset="0.55" stop-color="#b26bd1"/>
+      <stop offset="1" stop-color="#ffa883"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff3b0"/>
+      <stop offset="1" stop-color="#ffc857"/>
+    </linearGradient>
+    <linearGradient id="far" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a5bc7"/>
+      <stop offset="1" stop-color="#6a3fa8"/>
+    </linearGradient>
+    <linearGradient id="near" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b2a7a"/>
+      <stop offset="1" stop-color="#241a52"/>
+    </linearGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e8e8f2"/>
+    </linearGradient>
+    <clipPath id="frame">
+      <rect x="10" y="12" width="108" height="100" rx="20"/>
+    </clipPath>
+  </defs>
+
+  <!-- tile shadow -->
+  <rect x="10" y="16" width="108" height="100" rx="20" fill="#000" opacity="0.18"/>
+
+  <g clip-path="url(#frame)">
+    <rect x="10" y="12" width="108" height="100" fill="url(#sky)"/>
+    <circle cx="80" cy="56" r="17" fill="url(#sun)"/>
+    <circle cx="80" cy="56" r="25" fill="#fff3b0" opacity="0.18"/>
+    <path d="M10 86 L38 56 L56 74 L76 52 L118 88 L118 112 L10 112 Z" fill="url(#far)"/>
+    <path d="M10 96 L34 78 L54 92 L84 70 L118 98 L118 112 L10 112 Z" fill="url(#near)"/>
+    <path d="M70 79.5 L84 70 L94 77.5 L88 79 L84 76 L77 81 Z" fill="#ffffff" opacity="0.55"/>
+    <rect x="10" y="12" width="108" height="100" rx="20" fill="none" stroke="#fff" stroke-opacity="0.25" stroke-width="2"/>
+  </g>
+
+  <!-- "rotate" badge -->
+  <circle cx="98" cy="98" r="22" fill="#000" opacity="0.2"/>
+  <circle cx="98" cy="96" r="21" fill="url(#badge)"/>
+  <g fill="none" stroke="#5b4fd6" stroke-width="4.5" stroke-linecap="round">
+    <path d="M88.5 92 A10.5 10.5 0 0 1 107.5 92"/>
+    <path d="M107.5 100 A10.5 10.5 0 0 1 88.5 100"/>
+  </g>
+  <path d="M110.5 85.5 L109.5 94.5 L101 91.5 Z" fill="#5b4fd6" stroke="#5b4fd6" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M85.5 106.5 L86.5 97.5 L95 100.5 Z" fill="#5b4fd6" stroke="#5b4fd6" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>
