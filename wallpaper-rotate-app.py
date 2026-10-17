@@ -59,8 +59,7 @@ CSS = """
                         background: alpha(@accent_bg_color, 0.18); }
 .thumb-button.selected { box-shadow: inset 0 0 0 4px @window_fg_color; }
 .badge-current { background: @accent_bg_color; color: @accent_fg_color; }
-.preview-note { margin: 12px; padding: 4px 12px; border-radius: 99px;
-                background: rgba(0, 0, 0, 0.65); color: white; font-weight: bold; }
+
 .badge { margin: 6px; padding: 1px 8px; border-radius: 99px; font-size: 0.8em; font-weight: bold; }
 .badge-next { background: @accent_bg_color; color: @accent_fg_color; }
 .badge-new { background: rgba(0, 0, 0, 0.6); color: white; }
@@ -322,10 +321,6 @@ class Window(Adw.ApplicationWindow):
         self.preview.add_css_class("preview")
         self.preview.set_overflow(Gtk.Overflow.HIDDEN)
         preview_box = Gtk.Overlay(child=self.preview)
-        self.preview_note = Gtk.Label(halign=Gtk.Align.START, valign=Gtk.Align.START,
-                                      ellipsize=3, visible=False)
-        self.preview_note.add_css_class("preview-note")
-        preview_box.add_overlay(self.preview_note)
         self.cancel_btn = Gtk.Button(icon_name="window-close-symbolic", halign=Gtk.Align.END,
                                      valign=Gtk.Align.START, margin_top=10, margin_end=10,
                                      tooltip_text="Back to the current wallpaper (Esc)", visible=False)
@@ -617,8 +612,6 @@ class Window(Adw.ApplicationWindow):
             return
         self.selected = path
         self.mark_selected()
-        self.preview_note.set_label(f"Preview: {path.name} — press Change now to set it")
-        self.preview_note.set_visible(True)
         self.cancel_btn.set_visible(True)
         self.preview_gen += 1
         gen = self.preview_gen
@@ -641,7 +634,6 @@ class Window(Adw.ApplicationWindow):
             return
         self.selected = None
         self.mark_selected()
-        self.preview_note.set_visible(False)
         self.cancel_btn.set_visible(False)
         self.show_current_preview()
 
@@ -656,7 +648,6 @@ class Window(Adw.ApplicationWindow):
             path = self.selected
             self.selected = None
             self.mark_selected()
-            self.preview_note.set_visible(False)
             self.cancel_btn.set_visible(False)
             self.run_script(str(path))
         else:
