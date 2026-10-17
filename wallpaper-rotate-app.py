@@ -52,8 +52,13 @@ FIT_HELP = {
 CSS = """
 .preview { border-radius: 14px; }
 .thumb { border-radius: 8px; }
-.thumb-button { padding: 3px; border-radius: 11px; }
-.thumb-button.current { box-shadow: inset 0 0 0 3px @accent_bg_color; }
+.thumb-button { padding: 4px; border-radius: 12px; }
+.thumb-button.current { box-shadow: inset 0 0 0 4px @accent_bg_color;
+                        background: alpha(@accent_bg_color, 0.18); }
+.thumb-button.selected { box-shadow: inset 0 0 0 4px @window_fg_color; }
+.badge-current { background: @accent_bg_color; color: @accent_fg_color; }
+.preview-note { margin: 12px; padding: 4px 12px; border-radius: 99px;
+                background: rgba(0, 0, 0, 0.65); color: white; font-weight: bold; }
 .badge { margin: 6px; padding: 1px 8px; border-radius: 99px; font-size: 0.8em; font-weight: bold; }
 .badge-next { background: @accent_bg_color; color: @accent_fg_color; }
 .badge-new { background: rgba(0, 0, 0, 0.6); color: white; }
@@ -250,6 +255,9 @@ class Window(Adw.ApplicationWindow):
         self.folder = read_dir()
         self.generation = 0
         self.thumb_buttons = {}
+        self.current_badges = {}
+        self.selected = None  # picture shown in the preview but not applied yet
+        self.preview_gen = 0
         self.textures = {}  # (path, mtime) -> thumbnail
         self.monitors = []
         self.refresh_pending = 0
@@ -274,12 +282,28 @@ class Window(Adw.ApplicationWindow):
         self.preview.add_css_class("preview")
         self.preview.set_overflow(Gtk.Overflow.HIDDEN)
         self.preview.set_size_request(-1, round(600 / self.ratio))
-        box.append(self.preview)
+        preview_box = Gtk.Overlay(child=self.preview)
+        self.preview_note = Gtk.Label(halign=Gtk.Align.START, valign=Gtk.Align.START,
+                                      ellipsize=3, visible=False)
+        self.preview_note.add_css_class("preview-note")
+        preview_box.add_overlay(self.preview_note)
+        self.cancel_btn = Gtk.Button(icon_name="window-close-symbolic", halign=Gtk.Align.END,
+                                     valign=Gtk.Align.START, margin_top=10, margin_end=10,
+                                     tooltip_text="Back to the current wallpaper (Esc)", visible=False)
+        self.cancel_btn.add_css_class("circular")
+        self.cancel_btn.add_css_class("osd")
+        self.cancel_btn.connect("clicked", lambda *_: self.clear_selection())
+        preview_box.add_overlay(self.cancel_btn)
+        box.append(preview_box)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        self.add_controller(keys)
 
         self.change_btn = Gtk.Button(label="Change now", halign=Gtk.Align.CENTER)
         self.change_btn.add_css_class("pill")
         self.change_btn.add_css_class("suggested-action")
-        self.change_btn.connect("clicked", lambda *_: self.run_script())
+        self.change_btn.connect("clicked", self.on_change_now)
         box.append(self.change_btn)
 
         # Settings
@@ -326,7 +350,7 @@ class Window(Adw.ApplicationWindow):
         self.thumbs_group = Adw.PreferencesGroup(
             title="Queue",
             description="Pictures from the folder and all its subfolders. A shown picture "
-                        "moves to the end. Click a picture to set it now")
+                        "moves to the end. Click a picture to preview it, then press Change now")
         rescan_btn = Gtk.Button(valign=Gtk.Align.CENTER, tooltip_text="Read the folder again",
                                 child=Adw.ButtonContent(icon_name="view-refresh-symbolic",
                                                         label="Rescan"))
@@ -397,6 +421,7 @@ class Window(Adw.ApplicationWindow):
         while child := self.flow.get_first_child():
             self.flow.remove(child)
         self.thumb_buttons.clear()
+        self.current_badges.clear()
         self.empty.set_visible(not queue)
         self.flow.set_visible(bool(queue))
 
@@ -443,7 +468,13 @@ class Window(Adw.ApplicationWindow):
             btn = Gtk.Button(child=overlay, tooltip_text="\n".join(tip))
             btn.add_css_class("flat")
             btn.add_css_class("thumb-button")
-            btn.connect("clicked", lambda _b, p=path: self.run_script(str(p)))
+            on_screen = self.badge("Current", "badge-current")
+            on_screen.set_halign(Gtk.Align.END)
+            on_screen.set_valign(Gtk.Align.END)
+            on_screen.set_visible(False)
+            overlay.add_overlay(on_screen)
+            self.current_badges[str(path)] = on_screen
+            btn.connect("clicked", lambda _b, p=path: self.select(p))
             self.flow.append(btn)
             self.thumb_buttons[str(path)] = btn
 
@@ -461,7 +492,10 @@ class Window(Adw.ApplicationWindow):
                     pic.set_paintable(tex)
             self.load_async(path, tw * 2, done)
 
+        if self.selected and str(self.selected) not in self.thumb_buttons:
+            self.clear_selection()  # the selected picture is gone
         self.highlight_current()
+        self.mark_selected()
         self.watch_folder()
         return queue
 
@@ -510,11 +544,84 @@ class Window(Adw.ApplicationWindow):
                 btn.add_css_class("current")
             else:
                 btn.remove_css_class("current")
+            self.current_badges[path].set_visible(path == cur)
+
+    def mark_selected(self):
+        for path, btn in self.thumb_buttons.items():
+            if self.selected and path == str(self.selected):
+                btn.add_css_class("selected")
+            else:
+                btn.remove_css_class("selected")
+
+    def show_in_preview(self, path):
+        self.preview_gen += 1
+        gen = self.preview_gen
+
+        def done(tex):
+            if gen == self.preview_gen:
+                self.preview.set_paintable(tex)
+        if path and os.path.exists(path):
+            self.load_async(path, 1400, done)
+
+    def show_current_preview(self):
+        self.show_in_preview(shown_file(self.bg))
+
+    # ----- selecting a picture before applying it -----
+
+    def select(self, path):
+        if str(path) == current_wallpaper(self.bg):
+            self.clear_selection()  # already on screen
+            return
+        self.selected = path
+        self.mark_selected()
+        self.preview_note.set_label(f"Preview: {path.name} — press Change now to set it")
+        self.preview_note.set_visible(True)
+        self.cancel_btn.set_visible(True)
+        self.preview_gen += 1
+        gen = self.preview_gen
+        # Ask the script how the picture will look on this screen (it may compose it)
+        try:
+            proc = Gio.Subprocess.new([script_path(), "--preview", str(path)],
+                                      Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+        except GLib.Error:
+            self.show_in_preview(str(path))
+            return
+
+        def done(p, res):
+            _ok, out, _err = p.communicate_utf8_finish(res)
+            if gen == self.preview_gen and self.selected == path:
+                self.show_in_preview((out or "").strip() or str(path))
+        proc.communicate_utf8_async(None, None, done)
+
+    def clear_selection(self):
+        if self.selected is None:
+            return
+        self.selected = None
+        self.mark_selected()
+        self.preview_note.set_visible(False)
+        self.cancel_btn.set_visible(False)
+        self.show_current_preview()
+
+    def on_key(self, _ctrl, keyval, _code, _state):
+        if keyval == Gdk.KEY_Escape and self.selected:
+            self.clear_selection()
+            return True
+        return False
+
+    def on_change_now(self, _btn):
+        if self.selected:
+            path = self.selected
+            self.selected = None
+            self.mark_selected()
+            self.preview_note.set_visible(False)
+            self.cancel_btn.set_visible(False)
+            self.run_script(str(path))
+        else:
+            self.run_script()  # next in the queue
 
     def on_wallpaper_changed(self):
-        path = shown_file(self.bg)
-        if path and os.path.exists(path):
-            self.load_async(path, 1400, self.preview.set_paintable)
+        if not self.selected:
+            self.show_current_preview()
         self.highlight_current()
         self.schedule_reload()  # the shown picture moved to the end of the queue
 
@@ -574,6 +681,8 @@ class Window(Adw.ApplicationWindow):
         current = current_wallpaper(self.bg)
         if current and os.path.exists(current):
             self.run_script(current)  # show the current picture in the new mode
+            if self.selected:
+                self.select(self.selected)  # refresh the preview in the new mode
         else:
             self.schedule_reload()
 

@@ -15,7 +15,8 @@ Scheduled wallpaper rotation for GNOME, with a fair show queue and a small app t
 - The WallpaperRotate app:
   - preview of the current wallpaper and a **Change now** button;
   - folder, interval and fit mode settings, time of the next change;
-  - thumbnails in queue order with **Next** and **New** badges, the subfolder name, plus **Cropped**, **Blurred edges** / **Black bars** and **Low res** badges that show how each picture will look on your screen; click one to set it right away;
+  - thumbnails in queue order with **Next** and **New** badges, the subfolder name, plus **Cropped**, **Blurred edges** / **Black bars** and **Low res** badges that show how each picture will look on your screen; the current wallpaper is outlined and marked **Current**;
+  - click a thumbnail to see it in the large preview exactly as it will look on your screen, then press **Change now** to set it (Esc or × goes back);
   - a **Rescan** button.
 - Formats: jpg, jpeg, png, webp. The picture is set for both the light and the dark style.
 - If the computer was off when a change was due, the wallpaper changes right after it starts.
@@ -67,6 +68,7 @@ Composed pictures are cached in `~/.cache/wallpaper-rotate` (only the last few a
 wallpaper-rotate                      # next picture in the queue
 wallpaper-rotate ~/Pictures/beach.jpg # a specific picture
 wallpaper-rotate --queue              # print the queue
+wallpaper-rotate --preview pic.jpg    # print the file that would be shown, without setting it
 ```
 
 ```bash

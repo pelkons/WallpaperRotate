@@ -3,6 +3,8 @@
 
   wallpaper-rotate                    — set the next picture in the queue
   wallpaper-rotate /path/to/pic.jpg   — set a specific picture
+  wallpaper-rotate --preview PATH     — print the file that would be shown for PATH
+                                        (composed if needed), without setting it
   wallpaper-rotate --queue            — print the queue, one picture per line:
                                         status<TAB>effect<TAB>lowres<TAB>WxH<TAB>path
                                         status: new|seen, effect: exact|crop|fit,
@@ -58,7 +60,7 @@ MODES = ("auto", "fill", "fit", "blur")
 EXACT_TOLERANCE = 0.03  # aspect ratios within 3% count as the same
 AUTO_TOLERANCE = 0.10   # auto mode crops up to a 10% difference, fits beyond that
 LOWRES_FACTOR = 1.5     # upscaled more than 1.5x looks blurry
-KEEP_CACHED = 4
+KEEP_CACHED = 8
 
 
 def read_settings():
@@ -269,10 +271,12 @@ def compose(path, screen, blur):
         bg.savev(str(tmp), "jpeg", ["quality"], ["92"])
         tmp.replace(out)
     os.utime(out)
-    # Keep only a few recent compositions
+    # Keep only a few recent compositions, and never the one on screen
+    on_screen = shown_file()
     old = sorted(CACHE.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
     for p in old[KEEP_CACHED:]:
-        p.unlink(missing_ok=True)
+        if str(p) != on_screen:
+            p.unlink(missing_ok=True)
     return str(out)
 
 
@@ -282,10 +286,15 @@ def gsettings(*args):
     return subprocess.run(["gsettings", *args], capture_output=True, text=True, check=True).stdout
 
 
+def shown_file():
+    """The file GNOME shows (may be a composed copy in the cache)."""
+    uri = gsettings("get", SCHEMA, "picture-uri").strip().strip("'")
+    return urllib.parse.unquote(urllib.parse.urlparse(uri).path) if uri else ""
+
+
 def current_wallpaper():
     """The original picture on screen (not the composed copy)."""
-    uri = gsettings("get", SCHEMA, "picture-uri").strip().strip("'")
-    path = urllib.parse.unquote(urllib.parse.urlparse(uri).path) if uri else ""
+    path = shown_file()
     if path.startswith(str(CACHE) + "/"):
         try:
             return CURRENT.read_text(encoding="utf-8").strip()
@@ -294,7 +303,8 @@ def current_wallpaper():
     return path
 
 
-def set_wallpaper(path, hist):
+def prepare(path):
+    """The file to show for a picture and how it is shown: (file, effect, mode)."""
     screen = screen_size()
     mode = fit_mode()
     try:
@@ -303,6 +313,11 @@ def set_wallpaper(path, hist):
     except (GLib.Error, OSError) as e:
         print(f"could not compose {path}: {e}", file=sys.stderr)
         effect, shown = "exact", path  # GNOME will still try to show the original
+    return shown, effect, mode
+
+
+def set_wallpaper(path, hist):
+    shown, effect, mode = prepare(path)
 
     # History first, then the wallpaper: the app refreshes the queue on the change signal
     hist[path] = time.time()
@@ -323,6 +338,13 @@ def main(argv):
         d = folder()
         imgs = images(d)
         hist = reconcile(read_history(), imgs)
+
+        if argv and argv[0] == "--preview":
+            if len(argv) < 2 or not os.path.isfile(argv[1]):
+                print("usage: wallpaper-rotate --preview PATH", file=sys.stderr)
+                return 1
+            print(prepare(os.path.realpath(argv[1]))[0])
+            return 0
 
         if argv and argv[0] == "--queue":
             screen, mode = screen_size(), fit_mode()
