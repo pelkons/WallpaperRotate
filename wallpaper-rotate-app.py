@@ -19,7 +19,9 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
+gi.require_version("Gsk", "4.0")
+gi.require_version("Graphene", "1.0")
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Graphene, Gsk, Gtk  # noqa: E402
 
 APP_ID = "io.github.pelkons.WallpaperRotate"
 APP_NAME = "WallpaperRotate"
@@ -246,10 +248,43 @@ def to_texture(data):
     return Gdk.MemoryTexture.new(w, h, fmt, pixels, stride)
 
 
+class AspectBin(Gtk.Widget):
+    """Shows its child at a fixed aspect ratio: as wide as the space allows,
+    shrinking (down to min_height) when the window gets short."""
+
+    def __init__(self, child, ratio, min_height, natural_width):
+        super().__init__()
+        self.ratio, self.min_height, self.natural_width = ratio, min_height, natural_width
+        self.child = child
+        child.set_parent(self)
+
+    def do_dispose(self):
+        if self.child:
+            self.child.unparent()
+            self.child = None
+
+    def do_get_request_mode(self):
+        return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH
+
+    def do_measure(self, orientation, for_size):
+        self.child.measure(orientation, -1)
+        if orientation == Gtk.Orientation.HORIZONTAL:
+            return round(self.min_height * self.ratio), self.natural_width, -1, -1
+        width = for_size if for_size > 0 else self.natural_width
+        return self.min_height, max(self.min_height, round(width / self.ratio)), -1, -1
+
+    def do_size_allocate(self, width, height, _baseline):
+        w = min(width, height * self.ratio)
+        h = w / self.ratio
+        where = Graphene.Point().init((width - w) / 2, (height - h) / 2)
+        self.child.allocate(round(w), round(h), -1, Gsk.Transform.new().translate(where))
+
+
 class Window(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title=APP_NAME)
         self.set_default_size(640, 860)
+        self.set_size_request(480, 700)
         self.pool = ThreadPoolExecutor(max_workers=4)
         self.bg = Gio.Settings.new("org.gnome.desktop.background")
         self.folder = read_dir()
@@ -269,19 +304,23 @@ class Window(Adw.ApplicationWindow):
         view.set_content(self.toasts)
         self.set_content(view)
 
-        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        clamp = Adw.Clamp(maximum_size=720)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
-                      margin_top=12, margin_bottom=24, margin_start=18, margin_end=18)
-        clamp.set_child(box)
-        scroller.set_child(clamp)
-        self.toasts.set_child(scroller)
+        # Everything always fits: the preview shrinks with the window and only the
+        # queue scrolls. Wide windows get two columns: preview and settings | queue.
+        layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
+                         margin_top=12, margin_bottom=18, margin_start=18, margin_end=18)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, valign=Gtk.Align.START)
+        layout.append(box)
+        self.toasts.set_child(layout)
+
+        wide = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("min-width: 980sp"))
+        wide.add_setter(layout, "orientation", Gtk.Orientation.HORIZONTAL)
+        wide.add_setter(layout, "spacing", 24)
+        self.add_breakpoint(wide)
 
         # Current wallpaper preview
         self.preview = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True)
         self.preview.add_css_class("preview")
         self.preview.set_overflow(Gtk.Overflow.HIDDEN)
-        self.preview.set_size_request(-1, round(600 / self.ratio))
         preview_box = Gtk.Overlay(child=self.preview)
         self.preview_note = Gtk.Label(halign=Gtk.Align.START, valign=Gtk.Align.START,
                                       ellipsize=3, visible=False)
@@ -294,7 +333,7 @@ class Window(Adw.ApplicationWindow):
         self.cancel_btn.add_css_class("osd")
         self.cancel_btn.connect("clicked", lambda *_: self.clear_selection())
         preview_box.add_overlay(self.cancel_btn)
-        box.append(preview_box)
+        box.append(AspectBin(preview_box, self.ratio, min_height=90, natural_width=560))
 
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self.on_key)
@@ -349,21 +388,26 @@ class Window(Adw.ApplicationWindow):
         # Thumbnails
         self.thumbs_group = Adw.PreferencesGroup(
             title="Queue",
-            description="Pictures from the folder and all its subfolders. A shown picture "
-                        "moves to the end. Click a picture to preview it, then press Change now")
+            description="Click a picture to preview it, then press Change now")
         rescan_btn = Gtk.Button(valign=Gtk.Align.CENTER, tooltip_text="Read the folder again",
                                 child=Adw.ButtonContent(icon_name="view-refresh-symbolic",
                                                         label="Rescan"))
         rescan_btn.add_css_class("flat")
         rescan_btn.connect("clicked", self.on_rescan)
         self.thumbs_group.set_header_suffix(rescan_btn)
-        box.append(self.thumbs_group)
+        self.thumbs_group.set_vexpand(True)
+        self.thumbs_group.set_hexpand(True)
+        layout.append(self.thumbs_group)
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
-                                min_children_per_line=3, max_children_per_line=4,
-                                row_spacing=6, column_spacing=6)
+                                min_children_per_line=2, max_children_per_line=6,
+                                row_spacing=6, column_spacing=6, valign=Gtk.Align.START,
+                                halign=Gtk.Align.CENTER)
         self.empty = Gtk.Label(label="No pictures in this folder (jpg, png, webp)", margin_top=12)
         self.empty.add_css_class("dim-label")
-        self.thumbs_group.add(self.flow)
+        self.queue_scroll = Gtk.ScrolledWindow(child=self.flow, vexpand=True,
+                                               hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                               min_content_height=100)
+        self.thumbs_group.add(self.queue_scroll)
         self.thumbs_group.add(self.empty)
 
         self.bg.connect("changed::picture-uri", lambda *_: self.on_wallpaper_changed())
@@ -423,15 +467,13 @@ class Window(Adw.ApplicationWindow):
         self.thumb_buttons.clear()
         self.current_badges.clear()
         self.empty.set_visible(not queue)
-        self.flow.set_visible(bool(queue))
+        self.queue_scroll.set_visible(bool(queue))
 
-        tw = 150
-        th = round(tw / self.ratio)
+        tw = 168
         fit_label = "Black bars" if read_fit_mode() == "fit" else "Blurred edges"
         for i, item in enumerate(queue):
             path = item["path"]
             pic = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True)
-            pic.set_size_request(tw, th)
             pic.add_css_class("thumb")
             pic.set_overflow(Gtk.Overflow.HIDDEN)
             overlay = Gtk.Overlay(child=pic)
@@ -465,7 +507,8 @@ class Window(Adw.ApplicationWindow):
                 where.add_css_class("badge")
                 where.add_css_class("badge-info")
                 overlay.add_overlay(where)
-            btn = Gtk.Button(child=overlay, tooltip_text="\n".join(tip))
+            btn = Gtk.Button(child=AspectBin(overlay, self.ratio, min_height=round(tw / self.ratio), natural_width=tw),
+                             tooltip_text="\n".join(tip))
             btn.add_css_class("flat")
             btn.add_css_class("thumb-button")
             on_screen = self.badge("Current", "badge-current")

@@ -17,7 +17,10 @@ Scheduled wallpaper rotation for GNOME, with a fair show queue and a small app t
   - folder, interval and fit mode settings, time of the next change;
   - thumbnails in queue order with **Next** and **New** badges, the subfolder name, plus **Cropped**, **Blurred edges** / **Black bars** and **Low res** badges that show how each picture will look on your screen; the current wallpaper is outlined and marked **Current**;
   - click a thumbnail to see it in the large preview exactly as it will look on your screen, then press **Change now** to set it (Esc or × goes back);
-  - a **Rescan** button.
+  - a **Rescan** button;
+  - an adaptive layout: everything always fits, the preview shrinks with the window and only the queue scrolls; wide windows get two columns.
+
+![Wide window](docs/screenshot-wide.png)
 - Formats: jpg, jpeg, png, webp. The picture is set for both the light and the dark style.
 - If the computer was off when a change was due, the wallpaper changes right after it starts.
 
