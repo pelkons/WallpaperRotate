@@ -24,7 +24,9 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 APP_ID = "io.github.pelkons.WallpaperRotate"
 APP_NAME = "WallpaperRotate"
 HOME = Path.home()
-CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config")
+STATE = Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local" / "state") / "wallpaper-rotate"
+CACHE = Path(os.environ.get("XDG_CACHE_HOME") or HOME / ".cache") / "wallpaper-rotate"
 SETTINGS = CONFIG / "wallpaper-rotate" / "settings"
 DROPIN = CONFIG / "systemd" / "user" / "wallpaper-rotate.timer.d" / "interval.conf"
 TIMER = "wallpaper-rotate.timer"
@@ -37,6 +39,16 @@ INTERVALS = [("Off", 0), ("Every hour", 1), ("Every 2 hours", 2),
              ("Every 3 hours", 3), ("Every 4 hours", 4), ("Every 6 hours", 6),
              ("Every 12 hours", 12), ("Once a day", 24)]
 
+# How pictures that don't match the screen are shown: (label, FIT_MODE)
+FIT_MODES = [("Auto", "auto"), ("Fill screen, crop edges", "fill"),
+             ("Whole picture, black bars", "fit"), ("Whole picture, blurred edges", "blur")]
+FIT_HELP = {
+    "auto": "Fill if the shape is close to the screen, otherwise blurred edges",
+    "fill": "Always fill the screen; parts that don't fit are cut off",
+    "fit": "Always show the whole picture with black bars",
+    "blur": "Always show the whole picture over a blurred copy of itself",
+}
+
 CSS = """
 .preview { border-radius: 14px; }
 .thumb { border-radius: 8px; }
@@ -45,6 +57,8 @@ CSS = """
 .badge { margin: 6px; padding: 1px 8px; border-radius: 99px; font-size: 0.8em; font-weight: bold; }
 .badge-next { background: @accent_bg_color; color: @accent_fg_color; }
 .badge-new { background: rgba(0, 0, 0, 0.6); color: white; }
+.badge-info { background: rgba(0, 0, 0, 0.6); color: white; font-weight: normal; }
+.badge-warn { background: @warning_bg_color; color: @warning_fg_color; }
 """
 
 
@@ -55,21 +69,33 @@ def script_path():
 
 # ---------- settings and timer ----------
 
-def read_dir():
+def read_settings():
+    values = {}
     try:
         for line in SETTINGS.read_text(encoding="utf-8").splitlines():
-            if line.startswith("WALLPAPER_DIR="):
-                value = line.split("=", 1)[1].strip()
-                if value:
-                    return Path(value)
+            key, sep, value = line.partition("=")
+            if sep and not key.startswith("#") and value.strip():
+                values[key.strip()] = value.strip()
     except OSError:
         pass
-    return DEFAULT_DIR
+    return values
 
 
-def write_dir(path):
+def write_setting(key, value):
+    values = read_settings()
+    values[key] = str(value)
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS.write_text(f"# Written by WallpaperRotate\nWALLPAPER_DIR={path}\n", encoding="utf-8")
+    SETTINGS.write_text("# Written by WallpaperRotate\n"
+                        + "".join(f"{k}={v}\n" for k, v in values.items()), encoding="utf-8")
+
+
+def read_dir():
+    return Path(read_settings().get("WALLPAPER_DIR") or DEFAULT_DIR)
+
+
+def read_fit_mode():
+    mode = read_settings().get("FIT_MODE", "auto")
+    return mode if mode in dict((m, l) for l, m in FIT_MODES) else "auto"
 
 
 def systemctl(*args):
@@ -137,26 +163,45 @@ def list_images(folder):
 
 
 def get_queue(folder):
-    """Show queue from wallpaper-rotate --queue: [("new"|"seen", Path), ...]."""
+    """Show queue from wallpaper-rotate --queue.
+
+    Returns [{"status": new|seen, "effect": exact|crop|fit, "lowres": bool,
+              "size": "WxH", "path": Path}, ...]
+    """
     try:
         out = subprocess.run([script_path(), "--queue"], capture_output=True, text=True,
                              env={**os.environ, "WALLPAPER_DIR": str(folder)},
-                             timeout=10, check=True).stdout
+                             timeout=30, check=True).stdout
         queue = []
         for line in out.splitlines():
-            status, _, path = line.partition("\t")
-            if path:
-                queue.append((status, Path(path)))
+            parts = line.split("\t", 4)
+            if len(parts) == 5:
+                status, effect, lowres, size, path = parts
+                queue.append({"status": status, "effect": effect, "lowres": lowres == "1",
+                              "size": size.replace("x", "×"), "path": Path(path)})
         return queue
     except (OSError, subprocess.SubprocessError):
-        return [("seen", p) for p in list_images(folder)]
+        return [{"status": "seen", "effect": "exact", "lowres": False, "size": "?", "path": p}
+                for p in list_images(folder)]
 
 
-def current_wallpaper(bg):
+def shown_file(bg):
+    """The file GNOME actually shows (may be a composed copy in the cache)."""
     uri = bg.get_string("picture-uri")
     if Adw.StyleManager.get_default().get_dark():
         uri = bg.get_string("picture-uri-dark") or uri
     return Gio.File.new_for_uri(uri).get_path() if uri else None
+
+
+def current_wallpaper(bg):
+    """The original picture on screen."""
+    path = shown_file(bg)
+    if path and path.startswith(str(CACHE) + "/"):
+        try:
+            return (STATE / "current").read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    return path
 
 
 def plural_images(n):
@@ -252,6 +297,16 @@ class Window(Adw.ApplicationWindow):
         self.interval_row.connect("notify::selected", self.on_interval)
         group.add(self.interval_row)
 
+        self.fit_row = Adw.ComboRow(
+            title="Pictures of another shape",
+            model=Gtk.StringList.new([label for label, _ in FIT_MODES]))
+        self.fit_row.add_prefix(Gtk.Image(icon_name="zoom-fit-best-symbolic"))
+        mode = read_fit_mode()
+        self.fit_row.set_selected(next(i for i, (_, m) in enumerate(FIT_MODES) if m == mode))
+        self.fit_row.set_subtitle(FIT_HELP[mode])
+        self.fit_row.connect("notify::selected", self.on_fit_mode)
+        group.add(self.fit_row)
+
         self.next_row = Adw.ActionRow(title="Next change")
         self.next_row.add_prefix(Gtk.Image(icon_name="x-office-calendar-symbolic"))
         group.add(self.next_row)
@@ -335,7 +390,9 @@ class Window(Adw.ApplicationWindow):
 
         tw = 150
         th = round(tw / self.ratio)
-        for i, (status, path) in enumerate(queue):
+        fit_label = "Black bars" if read_fit_mode() == "fit" else "Blurred edges"
+        for i, item in enumerate(queue):
+            path = item["path"]
             pic = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True)
             pic.set_size_request(tw, th)
             pic.add_css_class("thumb")
@@ -344,10 +401,23 @@ class Window(Adw.ApplicationWindow):
             badges = Gtk.Box(spacing=0, halign=Gtk.Align.START, valign=Gtk.Align.START)
             if i == 0:
                 badges.append(self.badge("Next", "badge-next"))
-            if status == "new":
+            if item["status"] == "new":
                 badges.append(self.badge("New", "badge-new"))
             overlay.add_overlay(badges)
-            btn = Gtk.Button(child=overlay, tooltip_text=path.name)
+
+            notes = Gtk.Box(spacing=0, halign=Gtk.Align.START, valign=Gtk.Align.END)
+            tip = [f"{path.name} — {item['size']}"]
+            if item["effect"] == "crop":
+                notes.append(self.badge("Cropped", "badge-info"))
+                tip.append("Different shape from the screen: edges are cut off")
+            elif item["effect"] == "fit":
+                notes.append(self.badge(fit_label, "badge-info"))
+                tip.append(f"Different shape from the screen: shown whole, {fit_label.lower()}")
+            if item["lowres"]:
+                notes.append(self.badge("Low res", "badge-warn"))
+                tip.append("Smaller than the screen: will look blurry")
+            overlay.add_overlay(notes)
+            btn = Gtk.Button(child=overlay, tooltip_text="\n".join(tip))
             btn.add_css_class("flat")
             btn.add_css_class("thumb-button")
             btn.connect("clicked", lambda _b, p=path: self.run_script(str(p)))
@@ -412,7 +482,7 @@ class Window(Adw.ApplicationWindow):
                 btn.remove_css_class("current")
 
     def on_wallpaper_changed(self):
-        path = current_wallpaper(self.bg)
+        path = shown_file(self.bg)
         if path and os.path.exists(path):
             self.load_async(path, 1400, self.preview.set_paintable)
         self.highlight_current()
@@ -451,7 +521,7 @@ class Window(Adw.ApplicationWindow):
             if not f or not f.get_path():
                 return
             self.folder = Path(f.get_path())
-            write_dir(self.folder)
+            write_setting("WALLPAPER_DIR", self.folder)
             self.load_folder()
             if list_images(self.folder):
                 self.run_script()
@@ -461,11 +531,21 @@ class Window(Adw.ApplicationWindow):
 
     def on_rescan(self, _btn):
         queue = self.load_folder(rescan=True)
-        new = sum(1 for status, _ in queue if status == "new")
+        new = sum(1 for item in queue if item["status"] == "new")
         self.toast(f"Found {plural_images(len(queue))}, {new} new")
 
     def on_open_folder(self, _btn):
         Gtk.FileLauncher.new(Gio.File.new_for_path(str(self.folder))).launch(self, None, None)
+
+    def on_fit_mode(self, row, _pspec):
+        label, mode = FIT_MODES[row.get_selected()]
+        write_setting("FIT_MODE", mode)
+        row.set_subtitle(FIT_HELP[mode])
+        current = current_wallpaper(self.bg)
+        if current and os.path.exists(current):
+            self.run_script(current)  # show the current picture in the new mode
+        else:
+            self.schedule_reload()
 
     def on_interval(self, row, _pspec):
         label, hours = INTERVALS[row.get_selected()]
