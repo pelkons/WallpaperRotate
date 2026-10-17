@@ -9,12 +9,13 @@ Scheduled wallpaper rotation for GNOME, with a fair show queue and a small app t
 - Changes the wallpaper on its own: every hour, every 2, 3, 4, 6 or 12 hours, or once a day. Runs as a systemd user timer, so it works with the app closed.
 - **Show queue.** Pictures that were never shown come first (in the order they were added to the folder), then the rest, from the least to the most recently shown. A shown picture moves to the end of the queue, so nothing repeats until every picture has been shown.
 - **Pictures of any shape.** If a picture doesn't match the screen (a 16:9 picture on an ultrawide, a portrait photo), it is shown whole over a blurred, darkened copy of itself instead of being cropped. Pictures with nearly the same shape just fill the screen. You can switch to always fill (crop), black bars or blurred edges.
-- New pictures are picked up automatically: the folder is re-read before every change.
+- **Subfolders included.** Pictures are collected from the chosen folder and all its subfolders (hidden folders are skipped), so you can sort them into folders any way you like. A picture moved to another subfolder keeps its place in the queue.
+- New pictures are picked up automatically: the folder is re-read before every change, and the app notices new files and new subfolders right away.
 - Show history is always kept; deleted files drop out of it on their own.
 - The WallpaperRotate app:
   - preview of the current wallpaper and a **Change now** button;
   - folder, interval and fit mode settings, time of the next change;
-  - thumbnails in queue order with **Next** and **New** badges, plus **Cropped**, **Blurred edges** / **Black bars** and **Low res** badges that show how each picture will look on your screen; click one to set it right away;
+  - thumbnails in queue order with **Next** and **New** badges, the subfolder name, plus **Cropped**, **Blurred edges** / **Black bars** and **Low res** badges that show how each picture will look on your screen; click one to set it right away;
   - a **Rescan** button.
 - Formats: jpg, jpeg, png, webp. The picture is set for both the light and the dark style.
 - If the computer was off when a change was due, the wallpaper changes right after it starts.

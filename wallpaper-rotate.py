@@ -8,7 +8,8 @@
                                         status: new|seen, effect: exact|crop|fit,
                                         lowres: 1|0
 
-The queue is rebuilt on every run from the current contents of the folder:
+The queue is rebuilt on every run from the current contents of the folder
+and all its subfolders:
 never-shown pictures first (in the order they were added to the folder),
 then shown ones, from the least to the most recently shown.
 A shown picture moves to the end of the queue.
@@ -24,6 +25,7 @@ Settings (~/.config/wallpaper-rotate/settings, written by WallpaperRotate):
   WALLPAPER_DIR=  folder, default ~/Pictures/Wallpapers ($WALLPAPER_DIR wins)
   FIT_MODE=       auto|fill|fit|blur ($WALLPAPER_FIT wins)
 Show history: ~/.local/state/wallpaper-rotate/history ("time<TAB>path").
+A picture moved to another subfolder (same file name) keeps its history.
 Composed pictures are cached in ~/.cache/wallpaper-rotate.
 """
 import fcntl
@@ -103,10 +105,13 @@ def screen_size():
 
 
 def images(d):
-    try:
-        return [str(p) for p in d.iterdir() if p.is_file() and p.suffix.lower() in EXTS]
-    except OSError:
-        return []
+    """All pictures in the folder and its subfolders (hidden ones are skipped)."""
+    found = []
+    for root, dirs, files in os.walk(d):  # symlinked folders are not followed
+        dirs[:] = [x for x in dirs if not x.startswith(".")]
+        found += [os.path.join(root, f) for f in files
+                  if not f.startswith(".") and os.path.splitext(f)[1].lower() in EXTS]
+    return found
 
 
 def image_size(path):
@@ -147,8 +152,25 @@ def read_history():
                     hist[path] = float(t)
         except (OSError, ValueError):
             pass
-    # Forget files that were deleted from disk
-    return {p: t for p, t in hist.items() if os.path.isfile(p)}
+    return hist
+
+
+def reconcile(hist, imgs):
+    """Forget deleted files, but keep the history of a picture moved to another
+    subfolder: a missing file whose name matches exactly one unseen picture."""
+    unseen = {}
+    for p in imgs:
+        if p not in hist:
+            unseen.setdefault(os.path.basename(p), []).append(p)
+    out = {}
+    for p, t in sorted(hist.items(), key=lambda x: -x[1]):  # most recent first
+        if os.path.isfile(p):
+            out.setdefault(p, t)
+            continue
+        match = unseen.pop(os.path.basename(p), [])
+        if len(match) == 1 and match[0] not in out:
+            out[match[0]] = t
+    return out
 
 
 def write_history(hist):
@@ -298,11 +320,13 @@ def main(argv):
     STATE.mkdir(parents=True, exist_ok=True)
     with open(STATE / "lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # the timer and the app never run at the same time
-        hist = read_history()
+        d = folder()
+        imgs = images(d)
+        hist = reconcile(read_history(), imgs)
 
         if argv and argv[0] == "--queue":
             screen, mode = screen_size(), fit_mode()
-            for status, path in build_queue(images(folder()), hist):
+            for status, path in build_queue(imgs, hist):
                 try:
                     size = image_size(path)
                 except GLib.Error:
@@ -320,8 +344,7 @@ def main(argv):
             set_wallpaper(path, hist)
             return 0
 
-        d = folder()
-        queue = [p for _, p in build_queue(images(d), hist)]
+        queue = [p for _, p in build_queue(imgs, hist)]
         if not queue:
             print(f"no pictures in {d}", file=sys.stderr)
             return 0

@@ -153,13 +153,16 @@ def next_run_text():
     return f"{day} at {when:%H:%M}"
 
 
+def walk_dirs(folder):
+    """The folder and all its subfolders (hidden ones and symlinks are skipped)."""
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
+        yield root, files
+
+
 def list_images(folder):
-    try:
-        files = [p for p in folder.iterdir()
-                 if p.is_file() and p.suffix.lower() in EXTS]
-    except OSError:
-        return []
-    return sorted(files, key=lambda p: p.name.lower())
+    return [Path(root, f) for root, files in walk_dirs(folder) for f in sorted(files)
+            if not f.startswith(".") and os.path.splitext(f)[1].lower() in EXTS]
 
 
 def get_queue(folder):
@@ -208,6 +211,14 @@ def plural_images(n):
     return f"{n} picture" if n == 1 else f"{n} pictures"
 
 
+def describe_count(queue, folder):
+    text = plural_images(len(queue))
+    dirs = {item["path"].parent for item in queue}
+    if len(dirs) > 1 or (dirs and folder not in dirs):
+        text += f" in {len(dirs)} folder" + ("" if len(dirs) == 1 else "s")
+    return text
+
+
 def short_path(path):
     s = str(path)
     home = str(HOME)
@@ -240,7 +251,7 @@ class Window(Adw.ApplicationWindow):
         self.generation = 0
         self.thumb_buttons = {}
         self.textures = {}  # (path, mtime) -> thumbnail
-        self.monitor = None
+        self.monitors = []
         self.refresh_pending = 0
         self.ratio = self.screen_ratio()
 
@@ -314,7 +325,8 @@ class Window(Adw.ApplicationWindow):
         # Thumbnails
         self.thumbs_group = Adw.PreferencesGroup(
             title="Queue",
-            description="A shown picture moves to the end. Click a picture to set it now")
+            description="Pictures from the folder and all its subfolders. A shown picture "
+                        "moves to the end. Click a picture to set it now")
         rescan_btn = Gtk.Button(valign=Gtk.Align.CENTER, tooltip_text="Read the folder again",
                                 child=Adw.ButtonContent(icon_name="view-refresh-symbolic",
                                                         label="Rescan"))
@@ -380,7 +392,7 @@ class Window(Adw.ApplicationWindow):
         if rescan:
             self.textures.clear()
         queue = get_queue(self.folder)
-        self.folder_row.set_subtitle(f"{short_path(self.folder)} · {plural_images(len(queue))}")
+        self.folder_row.set_subtitle(f"{short_path(self.folder)} · {describe_count(queue, self.folder)}")
 
         while child := self.flow.get_first_child():
             self.flow.remove(child)
@@ -406,7 +418,11 @@ class Window(Adw.ApplicationWindow):
             overlay.add_overlay(badges)
 
             notes = Gtk.Box(spacing=0, halign=Gtk.Align.START, valign=Gtk.Align.END)
-            tip = [f"{path.name} — {item['size']}"]
+            try:
+                name = str(path.relative_to(self.folder))
+            except ValueError:
+                name = path.name
+            tip = [f"{name} — {item['size']}"]
             if item["effect"] == "crop":
                 notes.append(self.badge("Cropped", "badge-info"))
                 tip.append("Different shape from the screen: edges are cut off")
@@ -417,6 +433,13 @@ class Window(Adw.ApplicationWindow):
                 notes.append(self.badge("Low res", "badge-warn"))
                 tip.append("Smaller than the screen: will look blurry")
             overlay.add_overlay(notes)
+            if path.parent != self.folder:
+                # Which subfolder the picture came from
+                where = Gtk.Label(label=path.parent.name, halign=Gtk.Align.END,
+                                  valign=Gtk.Align.START, ellipsize=3, max_width_chars=14)
+                where.add_css_class("badge")
+                where.add_css_class("badge-info")
+                overlay.add_overlay(where)
             btn = Gtk.Button(child=overlay, tooltip_text="\n".join(tip))
             btn.add_css_class("flat")
             btn.add_css_class("thumb-button")
@@ -450,14 +473,21 @@ class Window(Adw.ApplicationWindow):
         return label
 
     def watch_folder(self):
-        if self.monitor:
-            self.monitor.cancel()
-        try:
-            self.monitor = Gio.File.new_for_path(str(self.folder)).monitor_directory(
-                Gio.FileMonitorFlags.WATCH_MOVES, None)
-            self.monitor.connect("changed", self.on_folder_changed)
-        except GLib.Error:
-            self.monitor = None
+        # One monitor per folder: GIO doesn't watch subfolders on its own.
+        # A new subfolder triggers a reload, which starts watching it too.
+        for m in self.monitors:
+            m.cancel()
+        self.monitors = []
+        for root, _files in walk_dirs(self.folder):
+            if len(self.monitors) >= 1000:
+                break
+            try:
+                m = Gio.File.new_for_path(root).monitor_directory(
+                    Gio.FileMonitorFlags.WATCH_MOVES, None)
+            except GLib.Error:
+                continue
+            m.connect("changed", self.on_folder_changed)
+            self.monitors.append(m)
 
     def on_folder_changed(self, *_):
         self.schedule_reload()
